@@ -78,3 +78,8 @@ storage/
 *.tmp
 *.temp
 *.bak
+
+# QuantIQ runtime files
+gemini_usage.json
+metadata.json
+metadata_v2.json
