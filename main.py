@@ -1014,6 +1014,53 @@ def root():
     }
 
 
+
+
+# ============================================================
+# TEMPORARY DEPLOYMENT DIAGNOSTIC
+# Remove this endpoint after debugging.
+# ============================================================
+
+@app.get("/debug/routes")
+def debug_routes():
+
+    import main as current_main
+
+    routes = []
+
+    for route in current_main.app.routes:
+
+        routes.append(
+            {
+                "path":
+                    route.path,
+
+                "methods":
+                    sorted(
+                        list(
+                            getattr(
+                                route,
+                                "methods",
+                                set(),
+                            )
+                        )
+                    ),
+            }
+        )
+
+    return {
+        "success": True,
+        "main_file":
+            current_main.__file__,
+        "app_title":
+            current_main.app.title,
+        "app_version":
+            current_main.app.version,
+        "routes":
+            routes,
+    }
+
+
 # ============================================================
 # HEALTH
 # ============================================================
