@@ -25,6 +25,28 @@ const API_URL =
   import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 
+async function apiFetch(url, options = {}) {
+  const token = sessionStorage.getItem("quantiq_auth_token");
+  const headers = new Headers(options.headers || {});
+
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  if (response.status === 401) {
+    sessionStorage.removeItem("quantiq_auth_token");
+    window.dispatchEvent(new Event("quantiq:unauthorized"));
+  }
+
+  return response;
+}
+
+
 /* ============================================================
    DATA TYPES
 ============================================================ */
@@ -261,6 +283,106 @@ function extractSQL(
 
 function App() {
 
+  const [authChecked, setAuthChecked] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const checkSession = async () => {
+      const token = sessionStorage.getItem("quantiq_auth_token");
+
+      if (!token) {
+        if (mounted) {
+          setIsAuthenticated(false);
+          setAuthChecked(true);
+        }
+        return;
+      }
+
+      try {
+        const response = await apiFetch(`${API_URL}/auth/me`);
+        if (mounted) {
+          setIsAuthenticated(response.ok);
+        }
+      } catch {
+        if (mounted) {
+          setIsAuthenticated(false);
+        }
+      } finally {
+        if (mounted) {
+          setAuthChecked(true);
+        }
+      }
+    };
+
+    const handleUnauthorized = () => {
+      if (mounted) {
+        setIsAuthenticated(false);
+      }
+    };
+
+    window.addEventListener("quantiq:unauthorized", handleUnauthorized);
+    checkSession();
+
+    return () => {
+      mounted = false;
+      window.removeEventListener("quantiq:unauthorized", handleUnauthorized);
+    };
+  }, []);
+
+  const handleLogin = async (event) => {
+    event.preventDefault();
+    setLoginError("");
+
+    if (!loginUsername.trim() || !loginPassword) {
+      setLoginError("Enter your username and password.");
+      return;
+    }
+
+    setLoginLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: loginUsername.trim(),
+          password: loginPassword,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data?.success || !data?.token) {
+        throw new Error(
+          data?.detail || "Login failed. Check your credentials and backend configuration."
+        );
+      }
+
+      sessionStorage.setItem("quantiq_auth_token", data.token);
+      setIsAuthenticated(true);
+      setLoginPassword("");
+      setLoginError("");
+    } catch (error) {
+      setLoginError(
+        error?.message || "Unable to connect to the QuantIQ authentication service."
+      );
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem("quantiq_auth_token");
+    setIsAuthenticated(false);
+    setLoginPassword("");
+    setLoginError("");
+  };
+
   /* ==========================================================
      UI STATE
   ========================================================== */
@@ -411,7 +533,7 @@ function App() {
       try {
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/health`
           );
 
@@ -659,7 +781,7 @@ function App() {
       try {
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/query`,
             {
               method: "POST",
@@ -885,7 +1007,7 @@ function App() {
       try {
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/disconnect`,
             {
               method: "POST",
@@ -1078,7 +1200,7 @@ function App() {
       try {
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/mysql/test`,
             {
               method: "POST",
@@ -1206,7 +1328,7 @@ function App() {
       try {
 
         const connectResponse =
-          await fetch(
+          await apiFetch(
             `${API_URL}/mysql/connect`,
             {
               method: "POST",
@@ -1262,7 +1384,7 @@ function App() {
 
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/mysql/databases`
           );
 
@@ -1342,7 +1464,7 @@ function App() {
       try {
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/disconnect`,
             {
               method: "POST",
@@ -1511,7 +1633,7 @@ function App() {
         try {
 
           const response =
-            await fetch(
+            await apiFetch(
               `${API_URL}/mysql/connect`,
               {
                 method: "POST",
@@ -1671,7 +1793,7 @@ function App() {
 
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/upload`,
             {
               method: "POST",
@@ -1753,13 +1875,121 @@ function App() {
 
 
   /* ==========================================================
+     AUTHENTICATION SCREEN
+  ========================================================== */
+
+  if (!authChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#05070d] text-white">
+        <div className="flex items-center gap-3 text-cyan-300">
+          <Loader2 className="animate-spin" size={22} />
+          <span>Checking secure session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#05070d] px-5 text-white">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(6,182,212,0.14),transparent_55%)]" />
+        <div className="pointer-events-none absolute -left-24 top-1/3 h-72 w-72 rounded-full bg-cyan-500/10 blur-3xl" />
+        <div className="pointer-events-none absolute -right-24 bottom-0 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl" />
+
+        <div className="relative w-full max-w-md rounded-3xl border border-white/10 bg-[#0b101a]/95 p-8 shadow-2xl shadow-black/40">
+          <div className="mb-8 flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-400/30 bg-cyan-400/10">
+              <Sparkles size={24} className="text-cyan-300" />
+            </div>
+            <div>
+              <div className="text-xl font-bold tracking-wide">QuantIQ</div>
+              <div className="text-sm text-slate-400">AI Data Analyst</div>
+            </div>
+          </div>
+
+          <div className="mb-7">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300">
+              Private workspace
+            </p>
+            <h1 className="text-3xl font-semibold tracking-tight">Welcome back</h1>
+            <p className="mt-2 text-sm leading-6 text-slate-400">
+              Sign in to securely access your data workspace.
+            </p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div>
+              <label htmlFor="quantiq-username" className="mb-2 block text-sm font-medium text-slate-300">
+                Username
+              </label>
+              <input
+                id="quantiq-username"
+                type="text"
+                autoComplete="username"
+                value={loginUsername}
+                onChange={(event) => setLoginUsername(event.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-[#070b12] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-400/70 focus:ring-2 focus:ring-cyan-400/10"
+                placeholder="Enter your username"
+                required
+              />
+            </div>
+
+            <div>
+              <label htmlFor="quantiq-password" className="mb-2 block text-sm font-medium text-slate-300">
+                Password
+              </label>
+              <input
+                id="quantiq-password"
+                type="password"
+                autoComplete="current-password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-[#070b12] px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-400/70 focus:ring-2 focus:ring-cyan-400/10"
+                placeholder="Enter your password"
+                required
+              />
+            </div>
+
+            {loginError && (
+              <div role="alert" className="rounded-xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm leading-5 text-red-300">
+                {loginError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loginLoading}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loginLoading && <Loader2 size={18} className="animate-spin" />}
+              {loginLoading ? "Signing in..." : "Sign in securely"}
+            </button>
+          </form>
+
+          <div className="mt-6 border-t border-white/10 pt-5 text-center text-xs text-slate-500">
+            Access is restricted to authorized users.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ==========================================================
      RENDER
   ========================================================== */
 
   return (
 
-    <div className="flex h-screen overflow-hidden bg-[#05070d] text-white">
+    <div className="relative flex h-screen overflow-hidden bg-[#05070d] text-white">
 
+      <button
+        type="button"
+        onClick={handleLogout}
+        title="Log out of QuantIQ"
+        className="absolute bottom-4 right-4 z-50 rounded-lg border border-white/15 bg-[#101722] px-3 py-2 text-xs font-medium text-slate-300 shadow-lg transition hover:border-cyan-400/40 hover:text-cyan-200"
+      >
+        Log out
+      </button>
 
       {/* ======================================================
           SIDEBAR

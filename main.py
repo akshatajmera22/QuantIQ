@@ -1,6 +1,11 @@
 import os
 import re
 import traceback
+import base64
+import hashlib
+import hmac
+import json
+import time
 
 from typing import (
     Any,
@@ -15,6 +20,7 @@ from fastapi import (
     UploadFile,
     File,
     Form,
+    Request,
 )
 
 from fastapi.middleware.cors import (
@@ -134,10 +140,163 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+# ============================================================
+# PRIVATE LOGIN / API AUTHENTICATION
+# ============================================================
+
+AUTH_TOKEN_TTL_SECONDS = 8 * 60 * 60
+
+
+def _auth_configured() -> bool:
+    return bool(
+        os.getenv("QUANTIQ_LOGIN_USERNAME")
+        and os.getenv("QUANTIQ_LOGIN_PASSWORD")
+        and os.getenv("QUANTIQ_AUTH_SECRET")
+    )
+
+
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(
+        value + ("=" * (-len(value) % 4))
+    )
+
+
+def _create_auth_token(username: str) -> str:
+    secret = os.getenv("QUANTIQ_AUTH_SECRET", "").encode("utf-8")
+    if len(secret) < 32:
+        raise RuntimeError(
+            "QUANTIQ_AUTH_SECRET must be configured with at least 32 characters."
+        )
+
+    payload = {
+        "sub": username,
+        "exp": int(time.time()) + AUTH_TOKEN_TTL_SECONDS,
+    }
+    encoded_payload = _b64url_encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    )
+    signature = hmac.new(
+        secret,
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return f"{encoded_payload}.{_b64url_encode(signature)}"
+
+
+def _verify_auth_token(token: str) -> bool:
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+        secret = os.getenv("QUANTIQ_AUTH_SECRET", "").encode("utf-8")
+        if len(secret) < 32:
+            return False
+
+        expected_signature = hmac.new(
+            secret,
+            encoded_payload.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+
+        supplied_signature = _b64url_decode(encoded_signature)
+        if not hmac.compare_digest(
+            expected_signature,
+            supplied_signature,
+        ):
+            return False
+
+        payload = json.loads(_b64url_decode(encoded_payload).decode("utf-8"))
+        return bool(
+            payload.get("sub")
+            and isinstance(payload.get("exp"), int)
+            and payload["exp"] > int(time.time())
+        )
+    except Exception:
+        return False
+
+
+@app.post("/auth/login")
+def auth_login(request: LoginRequest):
+    if not _auth_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Private login is not configured. Set "
+                "QUANTIQ_LOGIN_USERNAME, QUANTIQ_LOGIN_PASSWORD, "
+                "and QUANTIQ_AUTH_SECRET in the backend environment."
+            ),
+        )
+
+    configured_username = os.getenv("QUANTIQ_LOGIN_USERNAME", "")
+    configured_password = os.getenv("QUANTIQ_LOGIN_PASSWORD", "")
+
+    username_ok = hmac.compare_digest(
+        request.username.encode("utf-8"),
+        configured_username.encode("utf-8"),
+    )
+    password_ok = hmac.compare_digest(
+        request.password.encode("utf-8"),
+        configured_password.encode("utf-8"),
+    )
+
+    if not (username_ok and password_ok):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password.",
+        )
+
+    return {
+        "success": True,
+        "token": _create_auth_token(configured_username),
+        "expires_in": AUTH_TOKEN_TTL_SECONDS,
+        "username": configured_username,
+    }
+
+
+@app.get("/auth/me")
+def auth_me(request: Request):
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token or not _verify_auth_token(token):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    return {"success": True}
+
+
+@app.middleware("http")
+async def require_private_login(request: Request, call_next):
+    # Allow CORS preflight, health checks, and the login endpoint.
+    if (
+        request.method == "OPTIONS"
+        or request.url.path in {"/auth/login", "/health", "/"}
+    ):
+        return await call_next(request)
+
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+
+    if scheme.lower() != "bearer" or not token or not _verify_auth_token(token):
+        from starlette.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required. Please log in."},
+        )
+
+    return await call_next(request)
 
 
 # ============================================================
