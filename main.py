@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import time
+import io
 
 from typing import (
     Any,
@@ -885,8 +886,13 @@ def get_file_schema_context(
 # ============================================================
 
 def read_csv_with_encoding_fallback(
-    file_path: str,
+    file_content,
 ):
+
+    """
+    Read CSV content from memory without creating a temporary file.
+    Accepts raw bytes or a seekable file-like object.
+    """
 
     if pd is None:
 
@@ -907,8 +913,17 @@ def read_csv_with_encoding_fallback(
 
         try:
 
+            if isinstance(file_content, (bytes, bytearray)):
+
+                source = io.BytesIO(bytes(file_content))
+
+            else:
+
+                source = file_content
+                source.seek(0)
+
             return pd.read_csv(
-                file_path,
+                source,
                 encoding=encoding,
             )
 
@@ -2124,52 +2139,24 @@ async def upload_file(
                     ),
                 )
 
-            safe_filename = re.sub(
-                r"[^a-zA-Z0-9_.-]",
-                "_",
-                filename,
-            )
+            # Parse uploaded bytes directly in memory. Vercel's deployment
+            # filesystem is read-only, so this endpoint must not write files
+            # under os.getcwd() or rely on temporary files.
+            if extension == ".csv":
 
-            temp_path = os.path.join(
-                os.getcwd(),
-                f".quantiq_{safe_filename}",
-            )
-
-            try:
-
-                with open(
-                    temp_path,
-                    "wb",
-                ) as output_file:
-
-                    output_file.write(
+                dataframe = (
+                    read_csv_with_encoding_fallback(
                         contents
                     )
+                )
 
-                if extension == ".csv":
+            else:
 
-                    dataframe = (
-                        read_csv_with_encoding_fallback(
-                            temp_path
-                        )
+                dataframe = (
+                    pd.read_excel(
+                        io.BytesIO(contents)
                     )
-
-                else:
-
-                    dataframe = (
-                        pd.read_excel(
-                            temp_path
-                        )
-                    )
-
-            finally:
-
-                try:
-                    os.remove(
-                        temp_path
-                    )
-                except Exception:
-                    pass
+                )
 
             dataframe = (
                 normalize_dataframe(
