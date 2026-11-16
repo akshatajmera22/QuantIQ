@@ -2431,7 +2431,39 @@ def generate_sql(
         # Planner-selected output columns
         # ----------------------------------------------------
 
+        # If the planner asks to aggregate a metric (for example,
+        # SUM(Profit)), do not also select that metric as a raw
+        # column. DuckDB requires every non-aggregated SELECT
+        # expression to appear in GROUP BY.
+        aggregation = str(
+            analysis.get(
+                "aggregation",
+                "NONE",
+            ) or "NONE"
+        ).upper().strip()
+
+        metric_column = resolve_metric_column(
+            analysis
+        )
+
+        aggregated_metric = (
+            bool(metric_column)
+            and aggregation in {
+                "SUM",
+                "AVG",
+                "MIN",
+                "MAX",
+            }
+        )
+
         for column in output_columns:
+
+            if (
+                aggregated_metric
+                and str(column).strip().casefold()
+                == metric_column.casefold()
+            ):
+                continue
 
             quoted = quote_column_reference(
                 column,

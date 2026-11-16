@@ -1,4 +1,19 @@
 import { useEffect, useState } from "react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+} from "recharts";
 
 import {
   BarChart3,
@@ -274,6 +289,114 @@ function extractSQL(
   }
 
   return "";
+}
+
+
+
+function ChatChart({ rows, question = "" }) {
+  if (!Array.isArray(rows) || rows.length < 2) return null;
+
+  const columns = Object.keys(rows[0] || {});
+  if (columns.length < 2) return null;
+
+  const numericColumns = columns.filter((column) =>
+    rows.some((row) => {
+      const value = row?.[column];
+      return value !== null && value !== "" && Number.isFinite(Number(value));
+    })
+  );
+
+  const labelColumn = columns.find((column) => !numericColumns.includes(column));
+  const valueColumn = numericColumns[0];
+  if (!labelColumn || !valueColumn) return null;
+
+  const chartData = rows
+    .filter((row) => row?.[labelColumn] !== null && row?.[labelColumn] !== undefined)
+    .slice(0, 100)
+    .map((row) => ({
+      label: String(row[labelColumn]),
+      value: Number(row[valueColumn]),
+    }))
+    .filter((row) => Number.isFinite(row.value));
+
+  if (chartData.length < 2) return null;
+
+  const requestedType = question.toLowerCase();
+  const wantsPie = /\b(pie|doughnut|donut)\b/.test(requestedType);
+  const wantsLine = /\b(line|trend|over time|time series)\b/.test(requestedType);
+  const wantsBar = /\b(bar|column)\s*(chart|graph)?\b/.test(requestedType);
+
+  const isDateLabel = chartData.every((row) => !Number.isNaN(Date.parse(row.label)));
+  const chartType = wantsPie
+    ? "pie"
+    : wantsLine
+      ? "line"
+      : wantsBar
+        ? "bar"
+        : isDateLabel
+          ? "line"
+          : "bar";
+
+  const colors = ["#22d3ee", "#818cf8", "#34d399", "#fbbf24", "#fb7185", "#a78bfa", "#38bdf8", "#f97316"];
+
+  return (
+    <div className="mt-5 rounded-xl border border-white/10 bg-black/20 p-4">
+      <div className="mb-3 text-xs font-semibold text-slate-300">
+        {valueColumn} by {labelColumn}
+      </div>
+      <div className="h-64 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          {chartType === "pie" ? (
+            <PieChart>
+              <Pie
+                data={chartData}
+                dataKey="value"
+                nameKey="label"
+                cx="50%"
+                cy="50%"
+                outerRadius="78%"
+                label={({ name, percent }) =>
+                  `${name}: ${(percent * 100).toFixed(1)}%`
+                }
+              >
+                {chartData.map((entry, index) => (
+                  <Cell
+                    key={`${entry.label}-${index}`}
+                    fill={colors[index % colors.length]}
+                  />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{
+                  background: "#0b101a",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  borderRadius: 10,
+                  color: "#e2e8f0",
+                }}
+              />
+              <Legend />
+            </PieChart>
+          ) : chartType === "line" ? (
+            <LineChart data={chartData}>
+              <CartesianGrid stroke="rgba(148,163,184,0.15)" strokeDasharray="3 3" />
+              <XAxis dataKey="label" tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} axisLine={{ stroke: "rgba(148,163,184,0.2)" }} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ background: "#0b101a", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#e2e8f0" }} labelStyle={{ color: "#67e8f9" }} />
+              <Line type="monotone" dataKey="value" name={valueColumn} stroke="#22d3ee" strokeWidth={2} dot={false} />
+            </LineChart>
+          ) : (
+            <BarChart data={chartData}>
+              <CartesianGrid stroke="rgba(148,163,184,0.15)" strokeDasharray="3 3" />
+              <XAxis dataKey="label" tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} axisLine={{ stroke: "rgba(148,163,184,0.2)" }} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ background: "#0b101a", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#e2e8f0" }} labelStyle={{ color: "#67e8f9" }} />
+              <Bar dataKey="value" name={valueColumn} fill="#22d3ee" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
 }
 
 
@@ -892,6 +1015,8 @@ function App() {
 
               content:
                 answer,
+
+              question: text,
 
               sql:
                 sql,
@@ -2431,6 +2556,12 @@ function App() {
 
                       </div>
 
+
+                      {message.role === "assistant" &&
+                        !message.error &&
+                        message.rows?.length > 1 && (
+                          <ChatChart rows={message.rows} question={message.question || ""} />
+                        )}
 
                       {message.role ===
                         "assistant" &&
